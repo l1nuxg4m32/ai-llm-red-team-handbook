@@ -112,3 +112,6 @@ scripts/tools/build/*.json
 scripts/tools/build/*.txt
 final_audit.json
 old_chapter_07.md
+AI_LLM_Red_Team_Handbook_Gumroad_Edition.pdf
+*.pdf
+AI_LLM_Red_Team_Handbook.pdf

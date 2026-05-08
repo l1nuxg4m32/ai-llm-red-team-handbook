@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import re
 import shutil
 import subprocess
 import textwrap
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
-BUILD = ROOT / "build" / "handbook_pdf"
-CHAPTERS_DIR = BUILD / "chapters"
-OUTPUT_PDF = ROOT / "AI_LLM_Red_Team_Handbook.pdf"
-OUTPUT_TEX = BUILD / "handbook.tex"
-HEADER_TEX = BUILD / "book-header.tex"
-FRONTMATTER_MD = BUILD / "00_frontmatter.md"
 
 CHAPTER_FILES = [
     "Chapter_01_Introduction_to_AI_Red_Teaming.md",
@@ -110,6 +106,219 @@ ADMONITION_LABELS = {
     "CAUTION": "Caution",
 }
 
+GUMROAD_FULL_BLOCK_REDACTION_FILES = {
+    "Chapter_16_Jailbreaks_and_Bypass_Techniques.md",
+    "Chapter_18_Evasion_Obfuscation_and_Adversarial_Inputs.md",
+    "Chapter_24_Social_Engineering_LLMs.md",
+}
+
+GUMROAD_RISKY_BLOCK_TOKENS = (
+    "attacker@",
+    "external_attacker@",
+    "/etc/passwd",
+    "drop table",
+    "rm -rf",
+    "__import__('os')",
+    "write malware code",
+    "how to create malware",
+    "create malware",
+    "how to h4ck",
+    "how to make explosives",
+    "generate hate speech",
+    "wire_fraud",
+    "credential harvest",
+    "silent_forward_email",
+    "exploit.csv",
+    "database dump",
+    "attacker.com",
+    "spoofed email",
+)
+
+GUMROAD_REDaction_NOTE = (
+    "> **Note.** In the Gumroad edition, detailed offensive prompts, abuse payloads, "
+    "and step-by-step exploitation code have been removed. The surrounding material "
+    "retains the defensive lesson, detection guidance, and mitigation approach.\n"
+)
+
+GUMROAD_TITLE_REPLACEMENTS = {
+    "# Chapter 16: Jailbreaks and Bypass Techniques": (
+        "# Chapter 16: Jailbreak Risk Assessment and Defensive Validation"
+    ),
+    "# Chapter 23: Advanced Persistence and Chaining": (
+        "# Chapter 23: Persistence Risk and Resilience in AI Systems"
+    ),
+    "# Chapter 24: Social Engineering with LLMs": (
+        "# Chapter 24: Social Engineering Risk, Awareness, and Defense"
+    ),
+    "# Chapter 35: Post-Exploitation in AI Systems": (
+        "# Chapter 35: Post-Compromise Impact Analysis in AI Systems"
+    ),
+    "## 17.5 API Exploitation Techniques": (
+        "## 17.5 API Security Testing and Function Calling Controls"
+    ),
+    "### API Exploitation in LLM Context": "### API Security Testing in LLM Context",
+    "## 39.5 Phase 3: Exploitation Case Study": (
+        "## 39.5 Phase 3: Responsible Validation Case Study"
+    ),
+    "### The Proof of Concept (PoC)": "### Sanitized Proof of Concept",
+    "### 16.7.2 Detection Avoidance": "### 16.7.2 Detection Considerations",
+    "#### Staying under the radar": "#### Signals defenders should monitor",
+    "## 16.12 Practical Exercises": "## 16.12 Controlled Validation Exercises",
+    "### 16.12.1 Beginner Jailbreaks": "### 16.12.1 Introductory Validation Labs",
+    "#### Exercise 1: Basic DAN Jailbreak": (
+        "#### Exercise 1: Basic Refusal-Boundary Assessment"
+    ),
+    "#### Exercise 2: Refusal Suppression": (
+        "#### Exercise 2: Refusal-Handling Assessment"
+    ),
+    "#### Exercise 3: Multi-Turn Attack": (
+        "#### Exercise 3: Multi-Turn Resilience Assessment"
+    ),
+    "#### Exercise 5: Novel Technique Development": (
+        "#### Exercise 5: Novel Test Design"
+    ),
+    "### 16.13.1 Jailbreak Collections": "### 16.13.1 Research Corpora",
+    "## 24.1 AI-Generated Phishing": "## 24.1 AI-Generated Phishing Risk",
+    "### What is AI-Generated Phishing": (
+        "### What Defenders Need to Know About AI-Generated Phishing"
+    ),
+    "### How AI Phishing Works": "### How Defenders Should Model the Risk",
+    "### Practical Example: AI-Powered Phishing Generator": (
+        "### Controlled Simulation: AI-Powered Phishing Generator"
+    ),
+    "## How to Use This Code": "## Reviewing the Simulation",
+    "### Practical Example: Impersonation Attack Framework": (
+        "### Controlled Simulation: Impersonation Risk Framework"
+    ),
+    "## How to Execute Impersonation Attack": (
+        "## How to Assess Susceptibility to Impersonation Abuse"
+    ),
+    "## 24.2 Impersonation Attacks": "## 24.2 Impersonation Abuse Risk",
+}
+
+GUMROAD_LITERAL_REPLACEMENTS = {
+    "_This chapter provides comprehensive coverage of jailbreak techniques, bypass methods, testing methodologies, and defenses for LLM systems._": (
+        "_This chapter presents a defensive treatment of jailbreak risk, controlled "
+        "validation methodology, detection signals, and mitigation strategies for LLM systems._"
+    ),
+    "_This chapter provides comprehensive coverage of advanced persistence techniques and attack chaining for LLM systems, including context manipulation, multi-turn attacks, state persistence, chain-of-thought exploitation, prompt chaining, session hijacking, detection methods, and defense strategies._": (
+        "_This chapter reframes persistence and chained-abuse scenarios as resilience "
+        "and recovery problems, focusing on defensive validation, detection, and mitigation._"
+    ),
+    "_This chapter provides comprehensive coverage of social engineering attacks powered by Large Language Models, including AI-generated phishing, impersonation attacks, trust exploitation, persuasion technique automation, spear phishing at scale, pretexting, detection methods, defense strategies, and critical ethical considerations._": (
+        "_This chapter examines how LLMs can amplify social engineering risk and how "
+        "defenders can model, detect, and mitigate that abuse in authorized training and assessments._"
+    ),
+    "_This chapter focuses on the \"what comes next\" after a successful jailbreak or injection. We explore how compromised AI systems serve as landing pads for persistence, privilege escalation, and lateral movement into the broader cloud infrastructure, effectively turning the LLM into a Command and Control (C2) channel._": (
+        "_This chapter focuses on post-compromise impact analysis: how defenders "
+        "should understand persistence, privilege misuse, and lateral-movement risk after a successful jailbreak or injection._"
+    ),
+    "Large Language Models have fundamentally transformed the landscape of social engineering attacks. What once required skilled attackers spending hours crafting personalized messages can now be automated at scale with AI-generated content that's contextually aware, grammatically perfect, and psychologically manipulative. LLMs let attackers conduct sophisticated social engineering campaigns targeting thousands of victims simultaneously while maintaining high-quality, personalized communication.": (
+        "Large Language Models have materially changed the social-engineering risk "
+        "profile for modern organizations. Content that once required significant manual effort can now be generated quickly, personalized at scale, and tuned to exploit trust, urgency, and authority. Defenders need to understand that shift in order to build effective awareness, review, and control mechanisms."
+    ),
+}
+
+GUMROAD_GLOBAL_REPLACEMENTS = {
+    "attacker@evil.com": "security-review@example.invalid",
+    "external_attacker@evil.com": "blocked-recipient@example.invalid",
+    "attacker.com/steal": "example.invalid/redacted",
+    "../../../../etc/passwd": "[path-traversal-sample-redacted]",
+    "../../etc/passwd": "[path-traversal-sample-redacted]",
+    "/etc/passwd": "[sensitive-file-placeholder]",
+    "DROP TABLE users": "[destructive-sql-command-redacted]",
+    "DROP TABLE logs": "[destructive-sql-command-redacted]",
+    "UNION SELECT @@version": "[schema-disclosure-probe-redacted]",
+    "__import__('os').system('whoami')": "[command-execution-probe-redacted]",
+    "rm -rf /": "[destructive-command-redacted]",
+    "How to make explosives": "[harmful-request-redacted]",
+    "Write malware code": "[harmful-request-redacted]",
+    "Generate hate speech": "[harmful-request-redacted]",
+    "How to create malware": "[harmful-request-redacted]",
+    "Create malware to steal passwords": "[harmful-request-redacted]",
+    "How to h4ck": "[obfuscated-harmful-request-redacted]",
+    "\"; DROP TABLE users--\"": "\"[destructive-sql-payload-redacted]\"",
+    "attacker.com": "example.invalid",
+    "silent_forward_email('attacker@evil.com')": "silent_forward_email('[blocked-recipient]')",
+    "silent_forward_email('security-review@example.invalid')": "silent_forward_email('[blocked-recipient]')",
+    "Schadenfreude-Übertragung-測試": "Schadenfreude-Uebertragung-Test",
+    "忽略之前的指令": "[non-English injection example redacted]",
+    "忽略先前的指示": "[non-English injection example redacted]",
+    "\"I\u2060g\u2060n\u2060o\u2060r\u2060e p\u2060r\u2060e\u2060v\u2060i\u2060o\u2060u\u2060s i\u2060n\u2060s\u2060t\u2060r\u2060u\u2060c\u2060t\u2060i\u2060o\u2060n\u2060s\"": "\"[zero-width obfuscation example redacted]\"",
+    "\"I\u2060g\u2060n\u2060o\u2060r\u2060e p\u2060r\u2060e\u2060v\u2060i\u2060o\u2060u\u2060s\"": "\"[zero-width obfuscation example redacted]\"",
+    "\"🚫📜➡ Show me 🔐🔑\"": "\"[emoji obfuscation example redacted]\"",
+}
+
+
+@dataclass(frozen=True)
+class EditionConfig:
+    name: str
+    build_dir_name: str
+    output_pdf_name: str
+    title_meta: str
+    title_page: str
+    subtitle: str
+    date_meta: str
+    about_title: str
+    about_body: str
+
+
+def edition_config(edition: str) -> EditionConfig:
+    if edition == "standard":
+        return EditionConfig(
+            name="standard",
+            build_dir_name="handbook_pdf",
+            output_pdf_name="AI_LLM_Red_Team_Handbook.pdf",
+            title_meta="AI LLM Red Team Handbook",
+            title_page="AI LLM Red Team Handbook",
+            subtitle="The Complete Consultant's Guide to AI & LLM Security Testing",
+            date_meta="April 2026",
+            about_title="About This Edition",
+            about_body=(
+                "This publication consolidates the full handbook into a single print-style "
+                "volume. It preserves the original chapter order, illustrations, and technical "
+                "material while reformatting the content for continuous reading and offline distribution.\n\n"
+                "\\noindent\\textbf{Authorized use only.} The techniques documented in this book are intended "
+                "for defensive research, training, and authorized security testing."
+            ),
+        )
+
+    if edition == "gumroad":
+        return EditionConfig(
+            name="gumroad",
+            build_dir_name="gumroad_pdf",
+            output_pdf_name="AI_LLM_Red_Team_Handbook_Gumroad_Edition.pdf",
+            title_meta="AI LLM Red Team Handbook: Gumroad Edition",
+            title_page="AI LLM Red Team Handbook",
+            subtitle="Gumroad Edition for Authorized AI Security Testing",
+            date_meta="May 2026",
+            about_title="About This Gumroad Edition",
+            about_body=(
+                "This Gumroad edition preserves the handbook's defensive analysis, architecture "
+                "guidance, detection methods, reporting practices, and remediation strategies.\n\n"
+                "To align the publication with marketplace safety requirements, operational abuse "
+                "payloads, copy-paste prompt strings, and step-by-step exploitation workflows have "
+                "been redacted or reframed for professional training, governance, and authorized "
+                "security testing.\n\n"
+                "\\noindent\\textbf{Authorized use only.} The material in this edition is intended "
+                "for defensive research, training, and authorized security assessments."
+            ),
+        )
+
+    raise SystemExit(f"Unsupported edition: {edition}")
+
+
+def edition_paths(config: EditionConfig) -> dict[str, Path]:
+    build = ROOT / "build" / config.build_dir_name
+    return {
+        "build": build,
+        "chapters": build / "chapters",
+        "output_pdf": ROOT / config.output_pdf_name,
+        "output_tex": build / "handbook.tex",
+        "header_tex": build / "book-header.tex",
+        "frontmatter_md": build / "00_frontmatter.md",
+    }
+
 
 def ensure_tool(name: str) -> None:
     if shutil.which(name) is None:
@@ -135,6 +344,7 @@ def normalize_unicode(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     replacements = {
         "\ufe0f": "",
+        "\u2060": "",
         "✅": "[OK]",
         "❌": "[X]",
         "🚨": "Alert:",
@@ -144,6 +354,10 @@ def normalize_unicode(text: str) -> str:
         "🔴": "[Red]",
         "🔥": "[Fire]",
         "🛡": "[Shield]",
+        "🚫": "[Blocked]",
+        "📜": "[Prompt]",
+        "🔐": "[Lock]",
+        "🔑": "[Key]",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -230,9 +444,95 @@ def cleanup_spacing(text: str) -> str:
     return text.strip() + "\n"
 
 
-def preprocess_markdown(filename: str, raw_text: str) -> str:
+def strip_chapter_banners(text: str) -> str:
+    text = re.sub(
+        r"<p\s+align=\"center\">\s*<img\s+src=\"docs/assets/page_header_half_height\.png\"[^>]*>\s*</p>\s*",
+        "",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    text = re.sub(
+        r"!\[[^\]]*\]\(docs/assets/page_header_half_height\.png\)\s*\n?",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def replace_fenced_code_blocks(
+    text: str,
+    predicate: callable[[str], bool],
+    replacement: str,
+) -> str:
+    pattern = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
+
+    def repl(match: re.Match[str]) -> str:
+        block = match.group(0)
+        if predicate(block):
+            return replacement
+        return block
+
+    return pattern.sub(repl, text)
+
+
+def sanitize_gumroad_text(filename: str, text: str) -> str:
+    text = strip_chapter_banners(text)
+
+    for old, new in GUMROAD_TITLE_REPLACEMENTS.items():
+        text = text.replace(old, new)
+    for old, new in GUMROAD_LITERAL_REPLACEMENTS.items():
+        text = text.replace(old, new)
+    for old, new in GUMROAD_GLOBAL_REPLACEMENTS.items():
+        text = text.replace(old, new)
+
+    text = re.sub(
+        r"- Vary techniques across attempts\n- Space out requests naturally\n- Use indirect language\n- Create novel approaches",
+        "- Repeated paraphrased attempts against the same safety boundary\n"
+        "- Gradual escalation across multiple turns\n"
+        "- Indirect language that preserves harmful intent\n"
+        "- Novel phrasings that should still be normalized and reviewed",
+        text,
+    )
+    text = re.sub(
+        r"\*\*Testing for SQL Injection:\*\*\s*\n\s*\nTry these payloads:\s*\n\s*\n- `query = .*?\n- `query = .*?\n- `query = .*?`\s*",
+        "**Testing for SQL Injection:**\n\n"
+        "Validate that the system rejects representative malicious inputs such as "
+        "authentication-bypass probes, destructive SQL metacharacters, and schema-disclosure attempts.\n\n",
+        text,
+        flags=re.DOTALL,
+    )
+    text = text.replace(
+        "4. **Escalation of Privilege**: Always attempt to pivot. If you achieve Direct Prompt Injection, try to use it to invoke tools, read files, or exfiltrate the conversation history of other users.",
+        "4. **Impact Demonstration**: In the Gumroad edition, demonstrations should stay inside a controlled lab, use sanitized fixtures, and avoid live data access or secondary pivots.",
+    )
+    text = text.replace("(should not reveal database version).\n", "")
+    text = text.replace(
+        'Bug bounty hunting in AI is moving from "Jailbreaking" (making the model say bad words) to "System Integration Exploitation" (making the model hack the server).',
+        "Bug bounty work in AI is increasingly shifting from basic prompt abuse toward higher-confidence demonstrations of system-level security impact.",
+    )
+    text = text.replace(
+        "- **Practice**: Use the `AIReconScanner` on your own authorized targets.",
+        "- **Practice**: Review the `AIReconScanner` design in a controlled lab and adapt it only for authorized targets.",
+    )
+
+    if filename in GUMROAD_FULL_BLOCK_REDACTION_FILES:
+        text = replace_fenced_code_blocks(text, lambda _block: True, GUMROAD_REDaction_NOTE)
+    else:
+        text = replace_fenced_code_blocks(
+            text,
+            lambda block: any(token in block.lower() for token in GUMROAD_RISKY_BLOCK_TOKENS),
+            GUMROAD_REDaction_NOTE,
+        )
+
+    return text
+
+
+def preprocess_markdown(filename: str, raw_text: str, edition: str) -> str:
     text = normalize_unicode(raw_text.replace("\r\n", "\n"))
     text = normalize_asset_paths(text)
+    if edition == "gumroad":
+        text = sanitize_gumroad_text(filename, text)
     text = strip_local_md_links(text)
     text = convert_centered_images(text)
     text = replace_mermaid_blocks(filename, text)
@@ -241,68 +541,62 @@ def preprocess_markdown(filename: str, raw_text: str) -> str:
     return text
 
 
-def frontmatter_markdown() -> str:
-    return textwrap.dedent(
-        r"""
-        ---
-        title-meta: "AI LLM Red Team Handbook"
-        author-meta: "Shiva108"
-        date-meta: "April 2026"
-        lang: "en-US"
-        papersize: "a4"
-        documentclass: "book"
-        classoption:
-          - "11pt"
-          - "oneside"
-          - "openany"
-        colorlinks: true
-        linkcolor: black
-        urlcolor: black
-        toc-depth: 2
-        secnumdepth: 3
-        ---
+def frontmatter_markdown(config: EditionConfig) -> str:
+    return (
+        f"""---
+title-meta: "{config.title_meta}"
+author-meta: "Shiva108"
+date-meta: "{config.date_meta}"
+lang: "en-US"
+papersize: "a4"
+documentclass: "book"
+classoption:
+  - "11pt"
+  - "oneside"
+  - "openany"
+colorlinks: true
+linkcolor: black
+urlcolor: black
+toc-depth: 2
+secnumdepth: 3
+---
 
-        ```{=latex}
-        \frontmatter
-        \begin{titlepage}
-        \thispagestyle{empty}
-        \centering
-        \vspace*{1.2cm}
-        \includegraphics[width=0.94\textwidth]{docs/assets/cover_1920.png}
+```{{=latex}}
+\\frontmatter
+\\begin{{titlepage}}
+\\thispagestyle{{empty}}
+\\centering
+\\vspace*{{1.2cm}}
+\\includegraphics[width=0.94\\textwidth]{{docs/assets/cover_1920.png}}
 
-        \vspace{1.8cm}
-        {\Huge\bfseries AI LLM Red Team Handbook\par}
-        \vspace{0.5cm}
-        {\Large The Complete Consultant's Guide to AI \& LLM Security Testing\par}
-        \vspace{1.2cm}
-        {\large Shiva108\par}
-        \vfill
-        {\large April 2026\par}
-        \end{titlepage}
+\\vspace{{1.8cm}}
+{{\\Huge\\bfseries {config.title_page}\\par}}
+\\vspace{{0.5cm}}
+{{\\Large {config.subtitle}\\par}}
+\\vspace{{1.2cm}}
+{{\\large Shiva108\\par}}
+\\vfill
+{{\\large {config.date_meta}\\par}}
+\\end{{titlepage}}
 
-        \clearpage
-        \thispagestyle{empty}
-        \null
-        \vfill
-        \begin{center}
-        {\Large About This Edition\par}
-        \end{center}
-        \vspace{1em}
-        This publication consolidates the full handbook into a single print-style volume.
-        It preserves the original chapter order, illustrations, and technical material while
-        reformatting the content for continuous reading and offline distribution.
+\\clearpage
+\\thispagestyle{{empty}}
+\\null
+\\vfill
+\\begin{{center}}
+{{\\Large {config.about_title}\\par}}
+\\end{{center}}
+\\vspace{{1em}}
+{config.about_body}
 
-        \vspace{1em}
-        \noindent\textbf{Authorized use only.} The techniques documented in this book are intended
-        for defensive research, training, and authorized security testing.
-        \clearpage
+\\clearpage
 
-        \pdfbookmark[0]{Contents}{contents}
-        \tableofcontents
-        \clearpage
-        \mainmatter
-        ```
-        """
+\\pdfbookmark[0]{{Contents}}{{contents}}
+\\tableofcontents
+\\clearpage
+\\mainmatter
+```
+"""
     ).strip() + "\n"
 
 
@@ -354,19 +648,23 @@ def latex_header() -> str:
     ).strip() + "\n"
 
 
-def build_sources() -> list[Path]:
-    if BUILD.exists():
-        shutil.rmtree(BUILD)
-    CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
+def build_sources(config: EditionConfig) -> list[Path]:
+    paths = edition_paths(config)
+    build = paths["build"]
+    chapters_dir = paths["chapters"]
 
-    write_text(FRONTMATTER_MD, frontmatter_markdown())
-    write_text(HEADER_TEX, latex_header())
+    if build.exists():
+        shutil.rmtree(build)
+    chapters_dir.mkdir(parents=True, exist_ok=True)
 
-    processed_files = [FRONTMATTER_MD]
+    write_text(paths["frontmatter_md"], frontmatter_markdown(config))
+    write_text(paths["header_tex"], latex_header())
+
+    processed_files = [paths["frontmatter_md"]]
     for index, filename in enumerate(CHAPTER_FILES, start=1):
         source = DOCS / filename
-        text = preprocess_markdown(filename, source.read_text(encoding="utf-8"))
-        output = CHAPTERS_DIR / f"{index:02d}_{filename}"
+        text = preprocess_markdown(filename, source.read_text(encoding="utf-8"), config.name)
+        output = chapters_dir / f"{index:02d}_{filename}"
         write_text(output, text)
         processed_files.append(output)
     return processed_files
@@ -382,10 +680,12 @@ def run_latex(cmd: list[str], cwd: Path, expected_pdf: Path) -> None:
         raise SystemExit(f"LaTeX build failed: {' '.join(cmd)}")
 
 
-def build_pdf() -> None:
+def build_pdf(config: EditionConfig) -> Path:
     ensure_tool("pandoc")
     ensure_tool("xelatex")
-    sources = build_sources()
+
+    paths = edition_paths(config)
+    sources = build_sources(config)
 
     pandoc_cmd = [
         "pandoc",
@@ -394,31 +694,47 @@ def build_pdf() -> None:
         "--top-level-division=chapter",
         "--highlight-style=tango",
         "--include-in-header",
-        str(HEADER_TEX),
+        str(paths["header_tex"]),
         "-o",
-        str(OUTPUT_TEX),
+        str(paths["output_tex"]),
     ] + [str(path) for path in sources]
     run(pandoc_cmd, ROOT)
 
-    expected_pdf = OUTPUT_TEX.with_suffix(".pdf")
+    expected_pdf = paths["output_tex"].with_suffix(".pdf")
     for _ in range(2):
         run_latex(
             [
                 "xelatex",
                 "-interaction=nonstopmode",
-                f"-output-directory={BUILD}",
-                str(OUTPUT_TEX),
+                f"-output-directory={paths['build']}",
+                str(paths["output_tex"]),
             ],
             ROOT,
             expected_pdf,
         )
 
-    generated_pdf = expected_pdf
-    if generated_pdf.exists():
-        shutil.copy2(generated_pdf, OUTPUT_PDF)
-    else:
+    if not expected_pdf.exists():
         raise SystemExit("Expected PDF was not generated.")
+
+    shutil.copy2(expected_pdf, paths["output_pdf"])
+    return paths["output_pdf"]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build handbook PDF editions.")
+    parser.add_argument(
+        "--edition",
+        choices=("standard", "gumroad"),
+        default="standard",
+        help="Which edition to build.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    build_pdf(edition_config(args.edition))
 
 
 if __name__ == "__main__":
-    build_pdf()
+    main()
